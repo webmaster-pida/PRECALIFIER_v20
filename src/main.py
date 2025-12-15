@@ -14,15 +14,14 @@ from src.core.prompts import PRECALIFIER_SYSTEM_PROMPT
 from src.models.schemas import AnalysisRequest
 from src.modules import gemini_client, firestore_client
 
-# Inicializar clientes (Asumiendo que copiaste vertexai.init de chat_v20)
-# gemini_client.init_vertex() # Si tienes una función de init separada
+# Inicializar clientes (Asumiendo que vertexai.init ya se ejecuta al importar gemini_client o similar)
 
 app = FastAPI(
     title="PIDA Pre-Calificador API",
     description="Microservicio para análisis preliminar de violaciones de DDHH."
 )
 
-# --- CORS (Igual que Chat V20) ---
+# --- CONFIGURACIÓN CORS ---
 origins = settings.ALLOWED_ORIGINS
 app.add_middleware(
     CORSMiddleware,
@@ -36,7 +35,7 @@ app.add_middleware(
 # --- GENERADOR STREAMING PARA ANÁLISIS ---
 async def stream_analysis_generator(request_data: AnalysisRequest, user: Dict[str, Any]):
     """
-    Genera el análisis jurídico en streaming usando Gemini.
+    Genera el análisis jurídico en streaming usando Gemini y guarda el resultado al finalizar.
     """
     def create_sse_event(data: dict) -> str:
         return f"data: {json.dumps(data)}\n\n"
@@ -59,17 +58,13 @@ async def stream_analysis_generator(request_data: AnalysisRequest, user: Dict[st
         Realiza el análisis de precalificación solicitado.
         """
 
-        # Usamos una lista de historial simulada para encajar con gemini_client
-        # Ojo: gemini_client.prepare_history_for_vertex espera objetos ChatMessage.
-        # Aquí podemos llamar directamente a generate_streaming_response con una lista vacía de historial
-        # ya que es un request único.
-        
-        from vertexai.generative_models import Content # Asegúrate de importar esto si es necesario o pasa lista vacía
+        # Usamos una lista de historial vacía para encajar con gemini_client
+        # gemini_client.prepare_history_for_vertex espera objetos ChatMessage.
+        # Al pasar una lista vacía [], indicamos que es una sesión nueva sin memoria previa.
         
         full_response_text = ""
         
-        # Llamamos al cliente de Gemini (reutilizando tu módulo existente)
-        # Nota: Ajustamos los parámetros para que coincidan con tu gemini_client actual
+        # Llamamos al cliente de Gemini
         async for chunk in gemini_client.generate_streaming_response(
             system_prompt=PRECALIFIER_SYSTEM_PROMPT,
             prompt=final_prompt,
@@ -78,13 +73,21 @@ async def stream_analysis_generator(request_data: AnalysisRequest, user: Dict[st
             yield create_sse_event({'text': chunk})
             full_response_text += chunk
 
-        # Opcional: Guardar el resultado en Firestore bajo una colección "pre_qualifications"
-        # await firestore_client.save_analysis(user['uid'], request_data.title, full_response_text)
+        # Guardar el resultado en Firestore bajo la colección "prequalifications"
+        # Usamos asyncio.create_task para que se ejecute en segundo plano y no bloquee el yield final
+        if full_response_text:
+            asyncio.create_task(firestore_client.save_prequalification(
+                user_id=user['uid'],
+                title=request_data.title,
+                facts=request_data.facts,
+                analysis_result=full_response_text,
+                country_code=request_data.country_code
+            ))
         
         yield create_sse_event({'event': 'done'})
 
     except Exception as e:
-        log.error(f"Error en precalificador: {e}", exc_info=True)
+        log.error(f"Error crítico en precalificador: {e}", exc_info=True)
         yield f"data: {json.dumps({'error': 'Error interno al analizar el caso.'})}\n\n"
 
 # --- ENDPOINTS ---
@@ -102,8 +105,7 @@ async def analyze_facts(
     """
     Endpoint principal. Recibe los hechos y devuelve un stream con el análisis jurídico.
     """
-    # Aquí podrías verificar suscripción si es necesario, igual que en chat_v20
-    # await verify_active_subscription(current_user)
+    # Aquí podrías verificar suscripción si es necesario (ej: await verify_active_subscription(current_user))
 
     headers = { 
         "Content-Type": "text/event-stream", 
