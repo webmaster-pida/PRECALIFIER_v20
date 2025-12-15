@@ -82,3 +82,21 @@ async def update_conversation_title(user_id: str, convo_id: str, new_title: str)
         log.info(f"Título de la conversación {convo_id} actualizado a '{new_title}'.")
     except Exception as e:
         log.error(f"Error al actualizar el título de la convo {convo_id}: {e}")
+
+# --- NUEVA FUNCIÓN PARA EL PRECALIFICADOR ---
+async def save_prequalification(user_id: str, title: str, facts: str, analysis_result: str, country_code: str | None):
+    """Guarda el resultado del precalificador en una colección dedicada."""
+    try:
+        data = {
+            "title": title,
+            "facts": facts,
+            "analysis": analysis_result,
+            "country_code": country_code,
+            "created_at": firestore.SERVER_TIMESTAMP,
+            "type": "prequalification_v20"
+        }
+        # Guardar en subcolección 'prequalifications' del usuario
+        await db.collection("users").document(user_id).collection("prequalifications").add(data)
+        log.info(f"Precalificación guardada para usuario {user_id}")
+    except Exception as e:
+        log.error(f"Error guardando precalificación: {e}")
