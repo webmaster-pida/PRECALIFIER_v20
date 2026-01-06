@@ -17,11 +17,12 @@ except ValueError:
 # Esquema para documentación
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
-# --- EL PORTERO ---
+# --- EL PORTERO (SÓLO AUTENTICACIÓN) ---
 async def get_current_user(request: Request):
     """
     Dependencia para verificar el token de Firebase ID.
-    Usa listas de acceso pre-procesadas desde settings.
+    Ya no bloquea por dominio/email aquí para permitir el acceso a 
+    usuarios que no son VIP pero tienen suscripción de Stripe.
     """
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
@@ -33,31 +34,10 @@ async def get_current_user(request: Request):
     token = auth_header.split("Bearer ")[1]
     
     try:
-        # 1. Verificar firma
+        # 1. Verificar firma y validez del token
         decoded_token = auth.verify_id_token(token)
         
-        # 2. Obtener datos
-        email = decoded_token.get("email", "").lower()
-        domain = email.split("@")[1] if "@" in email else ""
-        
-        # 3. Listas de acceso (YA SON LISTAS LIMPIAS GRACIAS A CONFIG.PY)
-        allowed_domains = settings.ADMIN_DOMAINS
-        allowed_emails = settings.ADMIN_EMAILS
-
-        # 4. APLICAR LÓGICA DE SEGURIDAD
-        has_restrictions = bool(allowed_domains or allowed_emails)
-        
-        if has_restrictions:
-            is_domain_authorized = domain in allowed_domains
-            is_email_authorized = email in allowed_emails
-            
-            if not (is_domain_authorized or is_email_authorized):
-                log.warning(f"⛔ ACCESO DENEGADO: {email}. Dominio '{domain}' no autorizado.")
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="No tienes autorización para acceder a esta plataforma."
-                )
-
+        # 2. Retornamos el token decodificado
         return decoded_token
 
     except auth.ExpiredIdTokenError:
@@ -70,8 +50,6 @@ async def get_current_user(request: Request):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"El token es inválido: {e}",
         )
-    except HTTPException as he:
-        raise he
     except Exception as e:
         log.error(f"Error inesperado en autenticación: {e}", exc_info=True)
         raise HTTPException(
