@@ -2,7 +2,8 @@
 
 import logging
 import json
-from typing import List, Union, Optional
+import os
+from typing import List, Union
 import google.cloud.logging
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -21,27 +22,32 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 
     # --- Variables de Google Cloud y API ---
-    GOOGLE_CLOUD_PROJECT: str = "pida-ai-v20"
-    GOOGLE_CLOUD_LOCATION: str = "us-central1"
-    GEMINI_MODEL: str = "gemini-2.5-pro"
+    GOOGLE_CLOUD_PROJECT: str = os.getenv("PROJECT_ID", "pida-ai-v20")
+    GOOGLE_CLOUD_LOCATION: str = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     
-    # Vertex Search (Con valores por defecto para evitar crashes)
+    # Vertex Search (Valores por defecto)
     VERTEX_SEARCH_PROJECT_ID: str = "pida-ai-v20"
     VERTEX_SEARCH_LOCATION: str = "global"
     VERTEX_SEARCH_DATA_STORE_ID: str = "almacen-web-pida_1765039607916"
 
-    # PSE (Búsqueda antigua) - Las mantenemos opcionales o con string vacío para que no rompan el inicio
-    # Si Cloud Run las tiene configuradas, las usará. Si no, usará "".
+    # PSE (Opcionales)
     PSE_API_KEY: str = ""
     PSE_ID: str = ""
     
-    # URL del RAG (CRÍTICO: Agregamos el default aquí para corregir tu error)
+    # URL del RAG
     RAG_API_URL: str = "https://pida-rag-api-640849120264.us-central1.run.app/query"
 
     # --- Variables del Modelo Generativo ---
     MAX_OUTPUT_TOKENS: int = 16384
     TEMPERATURE: float = 0.7
     TOP_P: float = 0.95
+
+    # --- LÍMITES PRECALIFICADOR (VARIABLES DE ENTORNO CLOUDRUN) ---
+    # Nota: Pydantic leerá las variables de entorno automáticamente si coinciden con el nombre
+    LIMIT_BASICO_PRE_DAILY: int = 0
+    LIMIT_AVANZADO_PRE_DAILY: int = 20
+    LIMIT_PREMIUM_PRE_DAILY: int = 100
 
     # --- CONTROL DE ACCESO ---
     ALLOWED_ORIGINS: Union[str, List[str]] = '["https://pida.iiresodh.org", "https://pida-ai.com", "https://pida-ai-v20.web.app", "http://localhost", "http://localhost:8080"]'
