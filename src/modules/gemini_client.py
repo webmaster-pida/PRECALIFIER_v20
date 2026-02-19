@@ -2,7 +2,7 @@
 
 import vertexai
 import asyncio 
-from vertexai.generative_models import GenerativeModel, Content, Part, GenerationConfig
+from vertexai.generative_models import GenerativeModel, Content, Part, GenerationConfig, SafetySetting, HarmCategory, HarmBlockThreshold
 from typing import List, AsyncGenerator
 from src.config import settings, log
 from src.models.chat_models import ChatMessage
@@ -16,6 +16,13 @@ try:
         temperature=settings.TEMPERATURE,
         top_p=settings.TOP_P,
     )
+
+    safety_settings = [
+        SafetySetting(category=HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH),
+        SafetySetting(category=HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH),
+        SafetySetting(category=HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH),
+        SafetySetting(category=HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH),
+    ]
 
     model = GenerativeModel(settings.GEMINI_MODEL)
     log.info(f"Cliente de Vertex AI inicializado y modelo '{settings.GEMINI_MODEL}' cargado.")
@@ -46,21 +53,25 @@ async def generate_streaming_response(system_prompt: str, prompt: str, history: 
 
     try:
         # Iniciamos el chat (la sesión es local, no requiere await)
-        chat = model.start_chat(history=history)
+        chat = model.start_chat(history=history, response_validation=False)
         full_prompt = f"{system_prompt}\n\n---\n\n{prompt}"
         
         # --- SOLUCIÓN: Usar el método async nativo ---
         response_stream = await chat.send_message_async(
             full_prompt, 
             stream=True, 
-            generation_config=generation_config
+            generation_config=generation_config,
+            safety_settings=safety_settings
         )
 
         # Iteramos sobre el generador asíncrono
         async for chunk in response_stream:
-            if chunk.text:
-                yield chunk.text
-
+            try:
+                if chunk.text:
+                    yield chunk.text
+            except (ValueError, Exception):
+                # Esto ocurre si el fragmento es bloqueado
+                yield "\n\n[Contenido bloqueado por políticas de seguridad]"
     except Exception as e:
         log.error(f"Error al generar la respuesta en streaming desde Gemini: {e}", exc_info=True)
         yield "Hubo un problema al contactar al servicio de IA."
