@@ -78,16 +78,13 @@ async def get_user_plan_unified(current_user: Dict[str, Any]) -> str:
         return 'vip'
 
     # 2. VERIFICACIÓN FIRESTORE (Documento de Cliente)
-    # Leemos customers/{uid} igual que el Analizador y el Chat
     try:
         cust_doc = await db.collection('customers').document(user_id).get()
         if cust_doc.exists:
             data = cust_doc.to_dict()
             status = data.get('status')
-            # Aceptamos active o trialing
             if status in ['active', 'trialing']:
                 plan = data.get('plan', 'basico')
-                # Normalizamos nombres de plan y Trial
                 if data.get('has_trial'): return 'basico'
                 return plan.lower() if plan else 'basico'
     except Exception as e:
@@ -95,46 +92,49 @@ async def get_user_plan_unified(current_user: Dict[str, Any]) -> str:
         
     return 'none' # Sin acceso por defecto
 
-async def check_precalifier_limits(user_id: str, plan_key: str):
-    """
-    Verifica si el usuario puede realizar precalificaciones hoy.
-    """
-    if plan_key == 'none':
-        raise HTTPException(status_code=403, detail="No tienes un plan activo para usar el Precalificador.")
-
+# 🛡️ NUEVAS FUNCIONES DE CONSUMO ATÓMICO Y REEMBOLSO
+async def consume_precal_credit(user_id: str, plan_key: str):
     limit_daily = PRECAL_LIMITS.get(plan_key, 0)
-    
-    # Si el límite es 0 (ej: Plan Básico según tu config), bloqueamos.
-    if limit_daily == 0:
-         raise HTTPException(
-            status_code=403, 
-            detail=f"Tu plan {plan_key.capitalize()} no incluye acceso al Precalificador."
-        )
-
     if limit_daily == -1: return # VIP Ilimitado
 
     today = get_date_utc_minus_6()
     stats_ref = db.collection('users').document(user_id).collection('usage_stats').document(today)
-    doc = await stats_ref.get()
     
-    current_count = 0
-    if doc.exists:
-        current_count = doc.to_dict().get('precal_count', 0)
+    @firestore.async_transactional
+    async def check_and_increment(transaction, ref):
+        snapshot = await ref.get(transaction=transaction)
+        current_count = snapshot.get('precal_count') if snapshot.exists else 0
         
-    if current_count >= limit_daily:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Límite diario alcanzado para el plan {plan_key}"
-        )
+        if current_count >= limit_daily:
+            raise HTTPException(status_code=429, detail=f"Límite diario alcanzado para el plan {plan_key}")
+        
+        transaction.set(ref, {
+            'precal_count': current_count + 1,
+            'last_updated': firestore.SERVER_TIMESTAMP
+        }, merge=True)
 
-async def increment_precalifier_count(user_id: str):
-    """Incrementa el contador de uso de forma atómica"""
+    transaction = db.transaction()
+    await check_and_increment(transaction, stats_ref)
+
+async def refund_precal_credit(user_id: str):
     today = get_date_utc_minus_6()
     stats_ref = db.collection('users').document(user_id).collection('usage_stats').document(today)
-    await stats_ref.set({
-        'precal_count': firestore.Increment(1),
-        'last_updated': SERVER_TIMESTAMP
-    }, merge=True)
+    
+    @firestore.async_transactional
+    async def check_and_decrement(transaction, ref):
+        snapshot = await ref.get(transaction=transaction)
+        if snapshot.exists:
+            current_count = snapshot.get('precal_count', 0)
+            if current_count > 0:
+                transaction.update(ref, {
+                    'precal_count': current_count - 1,
+                    'last_updated': firestore.SERVER_TIMESTAMP
+                })
+    try:
+        transaction = db.transaction()
+        await check_and_decrement(transaction, stats_ref)
+    except Exception as e:
+        log.error(f"Error procesando reembolso de precalificador para {user_id}: {e}")
 
 # --- GENERADOR STREAMING PARA ANÁLISIS ---
 async def stream_analysis_generator(request_data: AnalysisRequest, user: Dict[str, Any], plan: str):
@@ -172,9 +172,8 @@ async def stream_analysis_generator(request_data: AnalysisRequest, user: Dict[st
             yield create_sse_event({'text': chunk})
             full_response_text += chunk
 
-        # Si hay texto generado, GUARDAMOS e INCREMENTAMOS
+        # Si hay texto generado, GUARDAMOS (El incremento ya se hizo al principio)
         if full_response_text:
-            # 1. Guardar Historial (Directo en DB, sin usar módulo externo, espejo al Analizador)
             user_id = user['uid']
             title_doc = request_data.title or "Sin título"
             
@@ -186,9 +185,6 @@ async def stream_analysis_generator(request_data: AnalysisRequest, user: Dict[st
                 "created_at": SERVER_TIMESTAMP,
                 "plan_at_time": plan
             })
-            
-            # 2. Incrementar Uso (Solo tras éxito)
-            await increment_precalifier_count(user_id)
         
         yield create_sse_event({'event': 'done'})
 
@@ -200,7 +196,7 @@ async def stream_analysis_generator(request_data: AnalysisRequest, user: Dict[st
 
 @app.get("/status")
 def read_status():
-    return {"status": "ok", "service": "Precalificador v2.0 (Unified Logic)"}
+    return {"status": "ok", "service": "Precalificador v2.0 (Security Patched)"}
 
 @app.post("/analyze", tags=["Analysis"])
 async def analyze_facts(
@@ -208,15 +204,35 @@ async def analyze_facts(
     request: Request,
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
-    """
-    Endpoint principal. Recibe los hechos y devuelve un stream con el análisis jurídico.
-    """
     # 1. Obtener Plan Unificado
     user_id = current_user['uid']
     plan = await get_user_plan_unified(current_user)
 
-    # 2. Verificar Límites (Lanza 403 o 429 si no cumple)
-    await check_precalifier_limits(user_id, plan)
+    if plan == 'none':
+        raise HTTPException(status_code=403, detail="No tienes un plan activo para usar el Precalificador.")
+
+    limit_daily = PRECAL_LIMITS.get(plan, 0)
+    if limit_daily == 0:
+        raise HTTPException(status_code=403, detail=f"Tu plan {plan.capitalize()} no incluye acceso al Precalificador.")
+
+    # 🛡️ 2. Consumo Atómico de Crédito
+    await consume_precal_credit(user_id, plan)
+
+    # 🛡️ 3. Generador Envolvente con Protección de Reembolso
+    async def counted_stream_generator():
+        has_error = False
+        tokens_sent = False 
+        
+        try:
+            async for chunk in stream_analysis_generator(analysis_request, current_user, plan):
+                if '"error":' in chunk:
+                    has_error = True
+                if '"text":' in chunk and not has_error:
+                    tokens_sent = True 
+                yield chunk
+        finally:
+            if has_error or not tokens_sent:
+                asyncio.create_task(refund_precal_credit(user_id))
 
     headers = { 
         "Content-Type": "text/event-stream", 
@@ -225,8 +241,4 @@ async def analyze_facts(
         "X-Accel-Buffering": "no" 
     }
     
-    # 3. Iniciar Stream (pasamos el plan para registro histórico)
-    return StreamingResponse(
-        stream_analysis_generator(analysis_request, current_user, plan), 
-        headers=headers
-    )
+    return StreamingResponse(counted_stream_generator(), headers=headers)
