@@ -4,12 +4,14 @@ import vertexai
 import asyncio 
 import re 
 import random 
+import google.cloud.aiplatform as aiplatform
+from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable, Aborted, InternalServerError
 from vertexai.generative_models import (
     GenerativeModel, 
     Content, 
     Part, 
     GenerationConfig, 
-    SafetySetting, 
+    Tool, 
     HarmCategory, 
     HarmBlockThreshold
 )
@@ -17,7 +19,7 @@ from typing import List, AsyncGenerator, Set
 from src.config import settings, log
 from src.models.chat_models import ChatMessage
 
-# --- INICIALIZACIÓN DEL CLIENTE Y MODELO ---
+# --- INICIALIZACIÓN ---
 try:
     vertexai.init(project=settings.GOOGLE_CLOUD_PROJECT, location=settings.GOOGLE_CLOUD_LOCATION)
 
@@ -27,12 +29,12 @@ try:
         top_p=settings.TOP_P,
     )
 
-    safety_settings = [
-        SafetySetting(category=HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH),
-        SafetySetting(category=HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH),
-        SafetySetting(category=HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH),
-        SafetySetting(category=HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH),
-    ]
+    safety_settings = {
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+    }
 
     model = GenerativeModel(settings.GEMINI_MODEL)
     log.info(f"Cliente de Vertex AI inicializado y modelo '{settings.GEMINI_MODEL}' cargado.")
@@ -41,10 +43,9 @@ except Exception as e:
     log.critical(f"No se pudo inicializar Vertex AI o cargar el modelo: {e}", exc_info=True)
     model = None
 
-# --- FUNCIONES AUXILIARES ---
+# --- UTILS ---
 
 def prepare_history_for_vertex(history: List[ChatMessage]) -> List[Content]:
-    """Convierte nuestro historial de Pydantic al formato que espera la API de Gemini."""
     vertex_history = []
     for message in history:
         role = 'user' if message.role == 'user' else 'model'
@@ -57,33 +58,39 @@ async def generate_streaming_response(
     history: List[Content],
     trusted_urls: Set[str] = set()
 ) -> AsyncGenerator[str, None]:
-    """
-    Genera una respuesta del modelo Gemini en modo streaming con limpieza de URLs.
-    """
+    
     if not model:
         log.error("El modelo Gemini no está disponible.")
         yield "Error: El modelo de IA no está configurado correctamente."
         return
 
-    try:
-        chat = model.start_chat(history=history, response_validation=False)
-        full_prompt = f"{system_prompt}\n\n---\n\n{prompt}"
-        
-        response_stream = await chat.send_message_async(
-            full_prompt, 
-            stream=True, 
-            generation_config=generation_config,
-            safety_settings=safety_settings
-        )
+    # RETRY LOGIC
+    MAX_RETRIES = 3
+    BASE_DELAY = 2 
 
-        text_buffer = ""
+    full_prompt = f"{system_prompt}\n\n---\n\n{prompt}"
 
-        async for chunk in response_stream:
-            try:
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            chat = model.start_chat(history=history, response_validation=False)
+            
+            response_stream = await chat.send_message_async(
+                full_prompt, 
+                stream=True, 
+                generation_config=generation_config,
+                safety_settings=safety_settings
+            )
+
+            text_buffer = "" 
+
+            async for chunk in response_stream:
+                # Se eliminó la captura automática de grounding_metadata de Google
+                # para evitar enlaces de redirección que causan errores de CORS.
+
                 if chunk.text:
                     text_buffer += chunk.text
                     
-                    # --- LÓGICA DE LIMPIEZA DE URLS ---
+                    # --- CLEANING LOGIC ---
                     def is_url_trusted(url_to_check):
                         clean_check = url_to_check.lower().strip().rstrip('/')
                         for t_url in trusted_urls:
@@ -92,44 +99,62 @@ async def generate_streaming_response(
                                 return True
                         return False
 
-                    # 1. Links Markdown (Limpieza agresiva de URLs)
+                    # 1. Links Markdown
                     md_pattern = r'\[([^\]]+)\]\s*\(\s*(https?://[^\s\)]+)\s*\)'
                     def replace_markdown_link(match):
-                        text = match.group(1)
-                        # Limpiamos signos de puntuación que Gemini suele pegar al final
-                        url = match.group(2).rstrip('.,;)>') 
-                        return f"[{text}]({url})" if is_url_trusted(url) else text
-                    
+                        return match.group(0) if is_url_trusted(match.group(2)) else match.group(1)
                     text_buffer = re.sub(md_pattern, replace_markdown_link, text_buffer)
 
                     # 2. URLs Sueltas
                     raw_pattern = r'(?<!\()(https?://[^\s\)]+)' 
                     def replace_raw_url(match):
-                        url = match.group(0).rstrip('.,;)>')
-                        return url if is_url_trusted(url) else ""
-                    
+                        return match.group(0) if is_url_trusted(match.group(0)) else ""
                     text_buffer = re.sub(raw_pattern, replace_raw_url, text_buffer)
 
-                    # 3. Limpieza mejorada de Artifacts de Citas: [1], (2), [3, 4]
+                    # 3. Limpieza mejorada de Artifacts de Citas: [1], (2), [3, 4], (5, 15, 16)
                     text_buffer = re.sub(r'\s?[\[\(]\s*\d+(?:\s*,\s*\d+)*\s*[\]\)]', '', text_buffer)
 
                     # 4. REPARACIÓN DE MARKDOWN ROTO
                     text_buffer = text_buffer.replace(">**", "**")
                     text_buffer = text_buffer.replace(" <", " \"")
                     text_buffer = text_buffer.replace("> ", "\" ")
+                    text_buffer = re.sub(r'\*\*\s*$', '', text_buffer, flags=re.MULTILINE)
 
-                    # 5. Buffering para evitar cortes en media palabra
-                    if len(text_buffer) < 300: 
-                        continue
-                    yield text_buffer
-                    text_buffer = ""
+                    # 5. AGGRESSIVE STRUCTURE CLEANING
+                    text_buffer = re.sub(r'(?m)^\s*[\-\*•>]\s*$', '', text_buffer)
+                    text_buffer = re.sub(r'(?m)^\s*>\s*>\s*$', '', text_buffer)
+                    text_buffer = re.sub(r'\n\s*\n\s*\n', '\n\n', text_buffer)
 
-            except (ValueError, Exception):
-                yield "\n\n[Contenido bloqueado por políticas de seguridad]"
-        
-        if text_buffer:
-            yield text_buffer
+                    # 6. BUFFERING
+                    if len(text_buffer) < 400: 
+                        if any(text_buffer.strip().endswith(c) for c in ['[', '(', '*', '-', '>', '•']):
+                            continue
+                        yield text_buffer
+                        text_buffer = ""
+                    else:
+                        yield text_buffer
+                        text_buffer = ""
 
-    except Exception as e:
-        log.error(f"Error al generar la respuesta en streaming desde Gemini: {e}", exc_info=True)
-        yield "Hubo un problema al contactar al servicio de IA."
+            if text_buffer:
+                text_buffer = re.sub(r'(?m)^\s*[\-\*•>]\s*$', '', text_buffer)
+                yield text_buffer
+
+            # Se eliminó la generación del footer "Fuentes Consultadas" basado en metadatos de Google.
+            
+            return 
+
+        except (ResourceExhausted, ServiceUnavailable, Aborted, InternalServerError) as e:
+            log.warning(f"Vertex AI Error ({type(e).__name__}): {e} - Reintentando...")
+            if attempt < MAX_RETRIES:
+                wait_time = (BASE_DELAY * (2 ** attempt)) + random.uniform(0, 1)
+                await asyncio.sleep(wait_time)
+                continue
+            else:
+                log.error("Agotados reintentos Vertex AI.")
+                yield f"Error: El sistema está saturado. Intente de nuevo más tarde."
+                return
+
+        except Exception as e:
+            log.error(f"Error Gemini: {e}", exc_info=True)
+            yield "Error inesperado en la generación."
+            return
