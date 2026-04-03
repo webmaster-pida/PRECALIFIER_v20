@@ -2,12 +2,22 @@
 
 import vertexai
 import asyncio 
-from vertexai.generative_models import GenerativeModel, Content, Part, GenerationConfig, SafetySetting, HarmCategory, HarmBlockThreshold
-from typing import List, AsyncGenerator
+import re 
+import random 
+from vertexai.generative_models import (
+    GenerativeModel, 
+    Content, 
+    Part, 
+    GenerationConfig, 
+    SafetySetting, 
+    HarmCategory, 
+    HarmBlockThreshold
+)
+from typing import List, AsyncGenerator, Set
 from src.config import settings, log
 from src.models.chat_models import ChatMessage
 
-# --- INICIALIZACIÓN DEL CLIENTE Y MODELO ---
+# --- INICIALIZACIÓN ---
 try:
     vertexai.init(project=settings.GOOGLE_CLOUD_PROJECT, location=settings.GOOGLE_CLOUD_LOCATION)
 
@@ -31,32 +41,32 @@ except Exception as e:
     log.critical(f"No se pudo inicializar Vertex AI o cargar el modelo: {e}", exc_info=True)
     model = None
 
-# --- FUNCIONES AUXILIARES ---
+# --- UTILS ---
 
 def prepare_history_for_vertex(history: List[ChatMessage]) -> List[Content]:
-    """Convierte nuestro historial de Pydantic al formato que espera la API de Gemini."""
     vertex_history = []
     for message in history:
         role = 'user' if message.role == 'user' else 'model'
         vertex_history.append(Content(role=role, parts=[Part.from_text(message.content)]))
     return vertex_history
 
-async def generate_streaming_response(system_prompt: str, prompt: str, history: List[Content]) -> AsyncGenerator[str, None]:
-    """
-    Genera una respuesta del modelo Gemini en modo streaming ASÍNCRONO REAL.
-    Usa send_message_async para no bloquear el event loop.
-    """
+async def generate_streaming_response(
+    system_prompt: str, 
+    prompt: str, 
+    history: List[Content],
+    trusted_urls: Set[str] = set()
+) -> AsyncGenerator[str, None]:
+    
     if not model:
         log.error("El modelo Gemini no está disponible.")
         yield "Error: El modelo de IA no está configurado correctamente."
         return
 
+    full_prompt = f"{system_prompt}\n\n---\n\n{prompt}"
+
     try:
-        # Iniciamos el chat (la sesión es local, no requiere await)
         chat = model.start_chat(history=history, response_validation=False)
-        full_prompt = f"{system_prompt}\n\n---\n\n{prompt}"
         
-        # --- SOLUCIÓN: Usar el método async nativo ---
         response_stream = await chat.send_message_async(
             full_prompt, 
             stream=True, 
@@ -64,14 +74,50 @@ async def generate_streaming_response(system_prompt: str, prompt: str, history: 
             safety_settings=safety_settings
         )
 
-        # Iteramos sobre el generador asíncrono
+        text_buffer = "" 
+
         async for chunk in response_stream:
-            try:
-                if chunk.text:
-                    yield chunk.text
-            except (ValueError, Exception):
-                # Esto ocurre si el fragmento es bloqueado
-                yield "\n\n[Contenido bloqueado por políticas de seguridad]"
+            if chunk.text:
+                text_buffer += chunk.text
+                
+                # --- LÓGICA DE LIMPIEZA DE URLS ---
+                def is_url_trusted(url_to_check):
+                    clean_check = url_to_check.lower().strip().rstrip('/')
+                    for t_url in trusted_urls:
+                        clean_trust = t_url.lower().strip().rstrip('/')
+                        if clean_check == clean_trust or clean_check.startswith(clean_trust):
+                            return True
+                    return False
+
+                # 1. Links Markdown
+                md_pattern = r'\[([^\]]+)\]\s*\(\s*(https?://[^\s\)]+)\s*\)'
+                def replace_markdown_link(match):
+                    return match.group(0) if is_url_trusted(match.group(2)) else match.group(1)
+                text_buffer = re.sub(md_pattern, replace_markdown_link, text_buffer)
+
+                # 2. URLs Sueltas
+                raw_pattern = r'(?<!\()(https?://[^\s\)]+)' 
+                def replace_raw_url(match):
+                    return match.group(0) if is_url_trusted(match.group(0)) else ""
+                text_buffer = re.sub(raw_pattern, replace_raw_url, text_buffer)
+
+                # 3. Limpieza de Citas [1], (2)
+                text_buffer = re.sub(r'\s?[\[\(]\s*\d+(?:\s*,\s*\d+)*\s*[\]\)]', '', text_buffer)
+
+                # 4. Reparación de Markdown roto
+                text_buffer = text_buffer.replace(">**", "**")
+                text_buffer = text_buffer.replace(" <", " \"")
+                text_buffer = text_buffer.replace("> ", "\" ")
+
+                # 5. Buffering de salida
+                if len(text_buffer) < 300: 
+                    continue
+                yield text_buffer
+                text_buffer = ""
+
+        if text_buffer:
+            yield text_buffer
+
     except Exception as e:
-        log.error(f"Error al generar la respuesta en streaming desde Gemini: {e}", exc_info=True)
-        yield "Hubo un problema al contactar al servicio de IA."
+        log.error(f"Error Gemini Precalificador: {e}", exc_info=True)
+        yield "Error inesperado en la generación del análisis."
