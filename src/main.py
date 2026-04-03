@@ -16,7 +16,7 @@ from src.core.security import get_current_user
 from src.core.prompts import PRECALIFIER_SYSTEM_PROMPT
 from src.models.schemas import AnalysisRequest
 
-# 👇 NUEVAS IMPORTACIONES HÍBRIDAS
+# 👇 IMPORTACIONES HÍBRIDAS
 from src.modules import gemini_client, perplexity_client, rag_client
 
 # Inicializar Firestore
@@ -24,7 +24,7 @@ db = AsyncClient(project=settings.GOOGLE_CLOUD_PROJECT)
 
 app = FastAPI(
     title="PIDA Pre-Calificador API",
-    description="Microservicio de análisis jurídico con Perplexity + RAG."
+    description="Microservicio para análisis preliminar de violaciones de DDHH con Perplexity y RAG."
 )
 
 # --- CONFIGURACIÓN CORS ---
@@ -43,19 +43,22 @@ PRECAL_LIMITS = {
     "basico": settings.LIMIT_BASICO_PRE_DAILY,
     "avanzado": settings.LIMIT_AVANZADO_PRE_DAILY,
     "premium": settings.LIMIT_PREMIUM_PRE_DAILY,
-    "vip": -1
+    "vip": -1 
 }
 
 # --- FUNCIONES DE CONTROL ---
 
 def get_date_utc_minus_6() -> str:
+    """Devuelve la fecha actual ajustada a UTC-6"""
     utc_now = datetime.now(timezone.utc)
     cst_now = utc_now - timedelta(hours=6)
     return cst_now.strftime('%Y-%m-%d')
 
 async def get_user_plan_unified(current_user: Dict[str, Any]) -> str:
+    """Determina el plan del usuario unificando lógica VIP y DB."""
     user_id = current_user.get('uid')
     user_email = current_user.get('email', '').strip().lower()
+    
     admin_domains = settings.ADMIN_DOMAINS
     admin_emails = settings.ADMIN_EMAILS
     email_domain = user_email.split("@")[-1] if "@" in user_email else ""
@@ -74,6 +77,7 @@ async def get_user_plan_unified(current_user: Dict[str, Any]) -> str:
                 return plan.lower() if plan else 'basico'
     except Exception as e:
         log.error(f"Error consultando plan en DB: {e}")
+        
     return 'none'
 
 async def consume_precal_credit(user_id: str, plan_key: str):
@@ -90,7 +94,7 @@ async def consume_precal_credit(user_id: str, plan_key: str):
         current_count = data.get('precal_count', 0)
         
         if current_count >= limit_daily:
-            raise HTTPException(status_code=429, detail=f"Límite diario alcanzado.")
+            raise HTTPException(status_code=429, detail=f"Límite diario alcanzado para el plan {plan_key}")
         
         transaction.set(ref, {
             'precal_count': current_count + 1,
@@ -116,50 +120,56 @@ async def refund_precal_credit(user_id: str):
         transaction = db.transaction()
         await check_and_decrement(transaction, stats_ref)
     except Exception as e:
-        log.error(f"Error refund: {e}")
+        log.error(f"Error procesando reembolso de precalificador para {user_id}: {e}")
 
-# --- GENERADOR STREAMING HÍBRIDO ---
+# --- GENERADOR STREAMING PARA ANÁLISIS HÍBRIDO ---
 async def stream_analysis_generator(request_data: AnalysisRequest, user: Dict[str, Any], plan: str):
+    """
+    Genera el análisis jurídico en streaming usando Gemini, RAG y Perplexity.
+    """
     def create_sse_event(data: dict) -> str:
         return f"data: {json.dumps(data)}\n\n"
 
     try:
         yield create_sse_event({"event": "status", "message": "Investigando bases legales y jurisprudencia..."})
         
-        # Búsqueda optimizada para Precalificador
-        search_query = f"Delitos y violaciones de DDHH en {request_data.country_code or 'Derecho Internacional'} para este caso: {request_data.facts[:300]}"
+        # 👇 QUERY OPTIMIZADA PARA EVITAR ENLACES ANTIGUOS
+        search_query = f"Código Penal VIGENTE y ACTUALIZADO de {request_data.country_code or 'El Salvador'} y delitos relacionados con: {request_data.facts[:200]}"
         
-        # Ejecución paralela
+        # 1. BÚSQUEDA PARALELA
         rag_task = rag_client.search_internal_documents(request_data.facts)
         perp_task = perplexity_client.get_perplexity_research(search_query)
         
         rag_context, web_context = await asyncio.gather(rag_task, perp_task)
         
-        # Recolección de URLs para limpieza
+        # 2. EXTRACCIÓN DE URLS PARA VALIDACIÓN
         combined_context = f"{rag_context}\n{web_context}"
         trusted_urls_set = set(re.findall(r'https?://[^\s\)\],>]+', combined_context))
         
-        yield create_sse_event({"event": "status", "message": "Sintetizando pre-análisis jurídico..."})
+        yield create_sse_event({"event": "status", "message": "Generando informe jurídico preliminar..."})
 
-        geo_context = f"Contexto Geográfico: {request_data.country_code or 'Universal'}"
+        geo_context = f"Contexto Geográfico: {request_data.country_code}" if request_data.country_code else "Contexto Geográfico: Universal"
         
         final_prompt = f"""
-{geo_context}
+        {geo_context}
+        
+        [CONTEXTO INTERNO DE JURISPRUDENCIA (RAG)]
+        {rag_context}
 
-[CONTEXTO INTERNO DE JURISPRUDENCIA (RAG)]
-{rag_context}
-
-[INVESTIGACIÓN WEB RECIENTE (Perplexity)]
-{web_context}
-
-RELATO DE HECHOS DEL USUARIO:
-{request_data.facts}
-
-Analiza los hechos usando el contexto proporcionado.
-"""
+        [INVESTIGACIÓN WEB RECIENTE (Perplexity)]
+        {web_context}
+        
+        RELATO DE HECHOS PROPORCIONADO POR EL USUARIO:
+        --------------------------------------------------
+        {request_data.facts}
+        --------------------------------------------------
+        
+        Realiza el análisis de precalificación solicitado utilizando las fuentes anteriores.
+        """
         
         full_response_text = ""
         
+        # Llamada al cliente de Gemini con trusted_urls
         async for chunk in gemini_client.generate_streaming_response(
             system_prompt=PRECALIFIER_SYSTEM_PROMPT,
             prompt=final_prompt,
@@ -171,8 +181,10 @@ Analiza los hechos usando el contexto proporcionado.
 
         if full_response_text:
             user_id = user['uid']
+            title_doc = request_data.title or "Sin título"
+            
             await db.collection('users').document(user_id).collection('prequalifications').add({
-                "title": request_data.title or "Sin título",
+                "title": title_doc,
                 "facts": request_data.facts,
                 "country_code": request_data.country_code,
                 "analysis": full_response_text,
@@ -183,14 +195,14 @@ Analiza los hechos usando el contexto proporcionado.
         yield create_sse_event({'event': 'done'})
 
     except Exception as e:
-        log.error(f"Error crítico precalificador: {e}", exc_info=True)
-        yield f"data: {json.dumps({'error': 'Error interno en el análisis.'})}\n\n"
+        log.error(f"Error crítico en precalificador: {e}", exc_info=True)
+        yield f"data: {json.dumps({'error': 'Error interno al analizar el caso.'})}\n\n"
 
 # --- ENDPOINTS ---
 
 @app.get("/status")
 def read_status():
-    return {"status": "ok", "service": "Precalificador v2.0 (Hybrid Engine)"}
+    return {"status": "ok", "service": "Precalificador v2.0 (Hybrid Powered)"}
 
 @app.post("/analyze", tags=["Analysis"])
 async def analyze_facts(
@@ -202,24 +214,34 @@ async def analyze_facts(
     plan = await get_user_plan_unified(current_user)
 
     if plan == 'none':
-        raise HTTPException(status_code=403, detail="No tienes acceso activo.")
+        raise HTTPException(status_code=403, detail="No tienes un plan activo para usar el Precalificador.")
+
+    limit_daily = PRECAL_LIMITS.get(plan, 0)
+    if limit_daily == 0:
+        raise HTTPException(status_code=403, detail=f"Tu plan no incluye acceso al Precalificador.")
 
     await consume_precal_credit(user_id, plan)
 
     async def counted_stream_generator():
         has_error = False
         tokens_sent = False 
+        
         try:
             async for chunk in stream_analysis_generator(analysis_request, current_user, plan):
-                if '"error":' in chunk: has_error = True
-                if '"text":' in chunk and not has_error: tokens_sent = True 
+                if '"error":' in chunk:
+                    has_error = True
+                if '"text":' in chunk and not has_error:
+                    tokens_sent = True 
                 yield chunk
         finally:
             if has_error or not tokens_sent:
                 asyncio.create_task(refund_precal_credit(user_id))
 
-    return StreamingResponse(counted_stream_generator(), headers={ 
+    headers = { 
         "Content-Type": "text/event-stream", 
         "Cache-Control": "no-cache", 
+        "Connection": "keep-alive", 
         "X-Accel-Buffering": "no" 
-    })
+    }
+    
+    return StreamingResponse(counted_stream_generator(), headers=headers)
