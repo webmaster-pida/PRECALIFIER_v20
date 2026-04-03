@@ -21,6 +21,10 @@ log.setLevel(logging.INFO)
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 
+    # --- NUEVO: API DE PERPLEXITY ---
+    PERPLEXITY_API_KEY: str = ""
+    PERPLEXITY_MODEL: str = "sonar-pro"
+
     # --- Variables de Google Cloud y API ---
     GOOGLE_CLOUD_PROJECT: str = os.getenv("PROJECT_ID", "pida-ai-v20")
     GOOGLE_CLOUD_LOCATION: str = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
@@ -44,7 +48,6 @@ class Settings(BaseSettings):
     TOP_P: float = 0.95
 
     # --- LÍMITES PRECALIFICADOR (VARIABLES DE ENTORNO CLOUDRUN) ---
-    # Nota: Pydantic leerá las variables de entorno automáticamente si coinciden con el nombre
     LIMIT_BASICO_PRE_DAILY: int = 0
     LIMIT_AVANZADO_PRE_DAILY: int = 20
     LIMIT_PREMIUM_PRE_DAILY: int = 100
