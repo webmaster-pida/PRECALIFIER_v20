@@ -125,7 +125,7 @@ async def generate_streaming_response(
                     text_buffer = text_buffer.replace(">**", "**")
                     text_buffer = text_buffer.replace(" <", " \"")
                     text_buffer = text_buffer.replace("> ", "\" ")
-                    text_buffer = re.sub(r'\*\*\s*$', '', text_buffer, flags=re.MULTILINE)
+                    # ELIMINADA: text_buffer = re.sub(r'\*\*\s*$', '', text_buffer, flags=re.MULTILINE)
 
                     # 5. AGGRESSIVE STRUCTURE CLEANING
                     text_buffer = re.sub(r'(?m)^\s*[\-\*•>]\s*$', '', text_buffer)
