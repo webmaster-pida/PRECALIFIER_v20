@@ -9,8 +9,9 @@ async def get_perplexity_research(query: str) -> str:
         "Content-Type": "application/json"
     }
     
-    # 💡 Agregamos el operador negativo de búsqueda para excluir la web de la PGR
-    optimized_query = f"{query} -site:pgrweb.go.cr"
+    # 💡 Excluimos explícitamente los dominios problemáticos de LatAm a nivel de búsqueda
+    blacklisted_sites = "-site:pgrweb.go.cr -site:spij.minjus.gob.pe -site:spijweb.minjus.gob.pe -site:tsj.gob.ve"
+    optimized_query = f"{query} {blacklisted_sites}"
     
     payload = {
         "model": settings.PERPLEXITY_MODEL,
@@ -22,9 +23,11 @@ Reglas estrictas:
 1. NO seas conversacional ni saludes.
 2. IGNORA EL FORMATO: Si el usuario pide diseñar una tabla, carta, o cronograma, NO busques herramientas de diseño, software (Canva, Asana, Word, Excel) ni plantillas. Busca ÚNICAMENTE el contexto legal, fáctico, diplomático o de derechos humanos necesario para llenar ese formato.
 3. Proporciona un resumen exhaustivo de los hechos, noticias, o jurisprudencia.
-4. SIEMPRE incluye las URLs completas de las fuentes reales.
+4. SIEMPRE incluye las URLs completas de las fuentes reales y asegúrate de que sean funcionales y estables.
 5. Solo utiliza fuentes serias, institucionales, académicas o periodísticas.
-6. PROHIBICIÓN DE DOMINIO: Tienes ESTRICTAMENTE PROHIBIDO utilizar o citar el sitio 'pgrweb.go.cr'. Si buscas legislación de Costa Rica, utiliza exclusivamente fuentes alternativas (ej. oas.org, asamblea.go.cr, WIPO, vlex, u otras bases de datos estables)."""
+6. PROHIBICIÓN DE DOMINIOS INESTABLES: Tienes ESTRICTAMENTE PROHIBIDO utilizar o citar sitios con URLs dinámicas que caducan, como 'pgrweb.go.cr' (Costa Rica), 'spij.minjus.gob.pe' (Perú) o 'tsj.gob.ve' (Venezuela). 
+7. FUENTES PREFERIDAS: Utiliza repositorios estables como oas.org, wipo.int, vlex, infoleg.gob.ar, bcn.cl/leychile, secretariasenado.gov.co, o cortes interamericanas.
+8. CASO EL SALVADOR: Si buscas leyes o jurisprudencia de El Salvador, EVITA enlaces que apunten directamente a documentos PDF pesados de 'asamblea.gob.sv' (prioriza versiones en HTML o texto). Ten extrema precaución con 'jurisprudencia.gob.sv' ya que sus enlaces suelen romperse; si te ves obligado a usarlo, proporciona suficientes datos identificativos (número de referencia, fecha, tribunal) en el texto para que el usuario pueda buscarlo manualmente si el enlace falla."""
             },
             {"role": "user", "content": optimized_query}
         ]
