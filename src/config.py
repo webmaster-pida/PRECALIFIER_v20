@@ -31,21 +31,21 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     
     # Vertex Search (Valores por defecto)
-    VERTEX_SEARCH_PROJECT_ID: str = "pida-ai-v20"
-    VERTEX_SEARCH_LOCATION: str = "global"
-    VERTEX_SEARCH_DATA_STORE_ID: str = "almacen-web-pida_1765039607916"
+    # VERTEX_SEARCH_PROJECT_ID: str = "pida-ai-v20"
+    # VERTEX_SEARCH_LOCATION: str = "global"
+    # VERTEX_SEARCH_DATA_STORE_ID: str = "almacen-web-pida_1765039607916"
 
     # PSE (Opcionales)
-    PSE_API_KEY: str = ""
-    PSE_ID: str = ""
+    # PSE_API_KEY: str = ""
+    # PSE_ID: str = ""
     
     # URL del RAG
-    RAG_API_URL: str = "https://pida-rag-api-640849120264.us-central1.run.app/query"
+    RAG_API_URL: str = "https://rag-v20-genai-465781488910.us-central1.run.app/query"
 
     # --- Variables del Modelo Generativo ---
     MAX_OUTPUT_TOKENS: int = 16384
-    TEMPERATURE: float = 0.7
-    TOP_P: float = 0.95
+    TEMPERATURE: float = 0.5
+    TOP_P: float = 0.8
 
     # --- LÍMITES PRECALIFICADOR (VARIABLES DE ENTORNO CLOUDRUN) ---
     LIMIT_BASICO_PRE_DAILY: int = 0
