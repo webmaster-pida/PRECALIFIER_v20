@@ -8,6 +8,10 @@ async def get_perplexity_research(query: str) -> str:
         "Authorization": f"Bearer {settings.PERPLEXITY_API_KEY}",
         "Content-Type": "application/json"
     }
+    
+    # 💡 Agregamos el operador negativo de búsqueda para excluir la web de la PGR
+    optimized_query = f"{query} -site:pgrweb.go.cr"
+    
     payload = {
         "model": settings.PERPLEXITY_MODEL,
         "messages": [
@@ -19,9 +23,10 @@ Reglas estrictas:
 2. IGNORA EL FORMATO: Si el usuario pide diseñar una tabla, carta, o cronograma, NO busques herramientas de diseño, software (Canva, Asana, Word, Excel) ni plantillas. Busca ÚNICAMENTE el contexto legal, fáctico, diplomático o de derechos humanos necesario para llenar ese formato.
 3. Proporciona un resumen exhaustivo de los hechos, noticias, o jurisprudencia.
 4. SIEMPRE incluye las URLs completas de las fuentes reales.
-5. Solo utiliza fuentes serias, institucionales, académicas o periodísticas."""
+5. Solo utiliza fuentes serias, institucionales, académicas o periodísticas.
+6. PROHIBICIÓN DE DOMINIO: Tienes ESTRICTAMENTE PROHIBIDO utilizar o citar el sitio 'pgrweb.go.cr'. Si buscas legislación de Costa Rica, utiliza exclusivamente fuentes alternativas (ej. oas.org, asamblea.go.cr, WIPO, vlex, u otras bases de datos estables)."""
             },
-            {"role": "user", "content": query}
+            {"role": "user", "content": optimized_query}
         ]
     }
     
