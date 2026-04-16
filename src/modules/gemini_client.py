@@ -100,6 +100,20 @@ async def generate_streaming_response(
                     # --- CLEANING LOGIC ---
                     def is_url_trusted(url_to_check):
                         clean_check = url_to_check.lower().strip().rstrip('/')
+                        
+                        # 👇 1. KILL-SWITCH: LISTA NEGRA ESTRICTA DE DOMINIOS
+                        banned_domains = [
+                            'pgrweb.go.cr', 
+                            'spij.minjus.gob.pe', 
+                            'spijweb.minjus.gob.pe', 
+                            'tsj.gob.ve',
+                            'jurisprudencia.gob.sv'
+                        ]
+                        # Si la URL contiene alguno de los dominios prohibidos, la matamos inmediatamente.
+                        if any(banned in clean_check for banned in banned_domains):
+                            return False
+
+                        # 2. VALIDACIÓN NORMAL CONTRA FUENTES DE PERPLEXITY/RAG
                         for t_url in trusted_urls:
                             clean_trust = t_url.lower().strip().rstrip('/')
                             if clean_check == clean_trust or clean_check.startswith(clean_trust):
@@ -109,12 +123,14 @@ async def generate_streaming_response(
                     # 1. Links Markdown
                     md_pattern = r'\[([^\]]+)\]\s*\(\s*(https?://[^\s\)]+)\s*\)'
                     def replace_markdown_link(match):
+                        # Si es confiable y no está baneada, devuelve el link. Si no, devuelve SOLO EL TEXTO.
                         return match.group(0) if is_url_trusted(match.group(2)) else match.group(1)
                     text_buffer = re.sub(md_pattern, replace_markdown_link, text_buffer)
 
                     # 2. URLs Sueltas
                     raw_pattern = r'(?<!\()(https?://[^\s\)]+)' 
                     def replace_raw_url(match):
+                        # Si está suelta y baneada, la borra.
                         return match.group(0) if is_url_trusted(match.group(0)) else ""
                     text_buffer = re.sub(raw_pattern, replace_raw_url, text_buffer)
 
