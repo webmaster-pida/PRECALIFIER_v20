@@ -54,6 +54,18 @@ async def create_new_conversation(user_id: str, title: str) -> Dict[str, Any]:
             "title": title,
             "created_at": firestore.SERVER_TIMESTAMP
         })
+        
+        # --- NUEVO: ESTADÍSTICA MENSUAL DE CONVERSACIONES ---
+        try:
+            current_month = datetime.datetime.now().strftime("%Y-%m")
+            stats_ref = db.collection('monthly_stats').document(current_month)
+            await stats_ref.set({
+                "conversaciones": firestore.Increment(1)
+            }, merge=True)
+        except Exception as stats_e:
+            log.error(f"Error guardando estadística mensual de conversaciones: {stats_e}")
+        # ----------------------------------------------------
+        
         return {"id": doc_ref.id, "title": title}
     except Exception as e:
         log.error(f"Error al crear nueva conversación para el usuario {user_id}: {e}")
@@ -97,6 +109,18 @@ async def save_prequalification(user_id: str, title: str, facts: str, analysis_r
         }
         # Guardar en subcolección 'prequalifications' del usuario
         await db.collection("users").document(user_id).collection("prequalifications").add(data)
+        
+        # --- NUEVO: ESTADÍSTICA MENSUAL DE PRECALIFICACIONES ---
+        try:
+            current_month = datetime.datetime.now().strftime("%Y-%m")
+            stats_ref = db.collection('monthly_stats').document(current_month)
+            await stats_ref.set({
+                "precalificaciones": firestore.Increment(1)
+            }, merge=True)
+        except Exception as stats_e:
+            log.error(f"Error guardando estadística mensual de precalificaciones: {stats_e}")
+        # -------------------------------------------------------
+        
         log.info(f"Precalificación guardada para usuario {user_id}")
     except Exception as e:
         log.error(f"Error guardando precalificación: {e}")
