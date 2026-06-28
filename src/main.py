@@ -58,13 +58,22 @@ async def get_user_plan_unified(current_user: Dict[str, Any]) -> str:
     """Determina el plan del usuario unificando lógica VIP y DB."""
     user_id = current_user.get('uid')
     user_email = current_user.get('email', '').strip().lower()
+    email_verified = current_user.get("email_verified", False)  # 1. <-- SE EXTRAE LA CONDICIÓN DE VERIFICACIÓN
     
     admin_domains = settings.ADMIN_DOMAINS
     admin_emails = settings.ADMIN_EMAILS
     email_domain = user_email.split("@")[-1] if "@" in user_email else ""
     
+    # 2. BYPASS VIP: Las cuentas autorizadas por variables de entorno pasan directo de forma ilimitada
     if (email_domain in admin_domains) or (user_email in admin_emails):
         return 'vip'
+
+    # 3. 👇 BLINDAJE DE SEGURIDAD: Denegar acceso instantáneo si la cuenta es común y no está verificada
+    if not email_verified:
+        raise HTTPException(
+            status_code=403, 
+            detail="Tu dirección de correo electrónico no ha sido verificada. Por favor, haz clic en el enlace enviado a tu bandeja de entrada antes de utilizar el precalificador."
+        )
 
     try:
         cust_doc = await db.collection('customers').document(user_id).get()
@@ -133,7 +142,6 @@ async def stream_analysis_generator(request_data: AnalysisRequest, user: Dict[st
     try:
         yield create_sse_event({"event": "status", "message": "Investigando bases legales y jurisprudencia..."})
         
-        # 👇 QUERY OPTIMIZADA PARA EVITAR ENLACES ANTIGUOS
         search_query = f"Código Penal VIGENTE y ACTUALIZADO de {request_data.country_code or 'El Salvador'} y delitos relacionados con: {request_data.facts[:200]}"
         
         # 1. BÚSQUEDA PARALELA
