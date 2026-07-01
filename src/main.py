@@ -158,7 +158,12 @@ async def stream_analysis_generator(request_data: AnalysisRequest, user: Dict[st
 
         geo_context = f"Contexto Geográfico: {request_data.country_code}" if request_data.country_code else "Contexto Geográfico: Universal"
         
+        # 1. Obtenemos la fecha actual
+        fecha_actual = get_date_utc_minus_6()
+        
+        # 2. Inyectamos la fecha actual al inicio del prompt
         final_prompt = f"""
+        Fecha actual del sistema: {fecha_actual}
         {geo_context}
         
         [CONTEXTO INTERNO DE JURISPRUDENCIA (RAG)]
