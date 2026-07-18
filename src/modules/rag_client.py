@@ -60,11 +60,15 @@ async def search_internal_documents(query: str) -> str:
 
         except httpx.TimeoutException as e:
             # --- MANEJO DE ERROR MEJORADO ---
-            log.error(f"Timeout al contactar el servicio RAG interno en {RAG_API_URL}: {e}", exc_info=True)
+            # CORREGIDO: Usamos rag_url en lugar de RAG_API_URL
+            log.error(f"Timeout al contactar el servicio RAG interno en {rag_url}: {e}", exc_info=True)
             return "\n\n### Contexto de Documentos Internos (RAG):\nEl servicio de búsqueda de documentos internos tardó demasiado en responder y no está disponible en este momento.\n"
+        
         except httpx.RequestError as e:
-            log.error(f"Error de red al contactar el servicio RAG interno en {RAG_API_URL}: {e}", exc_info=True)
+            # CORREGIDO: Usamos rag_url en lugar de RAG_API_URL
+            log.error(f"Error de red al contactar el servicio RAG interno en {rag_url}: {e}", exc_info=True)
             return "\n\n### Contexto de Documentos Internos (RAG):\nError de conexión al buscar en los documentos internos.\n"
+        
         except Exception as e:
             log.error(f"Error inesperado al procesar la respuesta del RAG interno: {e}", exc_info=True)
             return "\n\n### Contexto de Documentos Internos (RAG):\nError al procesar la búsqueda en los documentos internos.\n"
