@@ -34,17 +34,31 @@ Reglas estrictas:
     }
     
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        # Aumentamos el timeout a un valor más realista para búsquedas web
+        async with httpx.AsyncClient(timeout=45.0) as client:
             response = await client.post(url, json=payload, headers=headers)
+            
+            # Si Perplexity devuelve un error (ej. 400, 401, 429), esto lanzará un HTTPStatusError
             response.raise_for_status()
+            
             data = response.json()
             content = data["choices"][0]["message"]["content"]
             citations = data.get("citations", [])
             
-            # Formateamos las citas para que el regex de main.py las atrape fácilmente
             links_text = "\n\nFUENTES DE INTERNET:\n" + "\n".join(citations)
             return f"{content}\n{links_text}"
             
+    except httpx.TimeoutException as e:
+        log.error(f"Error consultando Perplexity: Timeout agotado esperando respuesta. Detalles: {repr(e)}")
+        return "La búsqueda en internet está tardando demasiado. Por favor, intenta de nuevo."
+        
+    except httpx.HTTPStatusError as e:
+        # Esto captura errores 4xx y 5xx y nos muestra qué se queja Perplexity
+        error_body = e.response.text
+        log.error(f"Error consultando Perplexity: Código HTTP {e.response.status_code}. Respuesta: {error_body}")
+        return "Ocurrió un error de conexión con el proveedor de búsqueda."
+        
     except Exception as e:
-        log.error(f"Error consultando Perplexity: {e}")
+        # Usar log.exception imprime toda la traza (traceback) en tus logs, no solo un mensaje vacío
+        log.exception(f"Error inesperado consultando Perplexity: {repr(e)}")
         return "No se pudo obtener información de internet en este momento."
