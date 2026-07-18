@@ -34,7 +34,7 @@ Reglas estrictas:
     }
     
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=20.0) as client:
             response = await client.post(url, json=payload, headers=headers)
             response.raise_for_status()
             data = response.json()
