@@ -54,6 +54,12 @@ def get_date_utc_minus_6() -> str:
     cst_now = utc_now - timedelta(hours=6)
     return cst_now.strftime('%Y-%m-%d')
 
+# NUEVA FUNCIÓN PARA LOS LÍMITES MENSUALES
+def get_month_utc_minus_6() -> str:
+    utc_now = datetime.now(timezone.utc)
+    cst_now = utc_now - timedelta(hours=6)
+    return cst_now.strftime('%Y-%m')
+
 async def get_user_plan_unified(current_user: Dict[str, Any]) -> str:
     """Determina el plan del usuario unificando lógica VIP y DB."""
     user_id = current_user.get('uid')
@@ -90,11 +96,11 @@ async def get_user_plan_unified(current_user: Dict[str, Any]) -> str:
     return 'none'
 
 async def consume_precal_credit(user_id: str, plan_key: str):
-    limit_daily = PRECAL_LIMITS.get(plan_key, 0)
-    if limit_daily == -1: return 
+    limit_monthly = PRECAL_LIMITS.get(plan_key, 0)
+    if limit_monthly == -1: return 
 
-    today = get_date_utc_minus_6()
-    stats_ref = db.collection('users').document(user_id).collection('usage_stats').document(today)
+    current_month = get_month_utc_minus_6()
+    stats_ref = db.collection('users').document(user_id).collection('usage_stats').document(current_month)
     
     @firestore.async_transactional
     async def check_and_increment(transaction, ref):
@@ -102,8 +108,8 @@ async def consume_precal_credit(user_id: str, plan_key: str):
         data = snapshot.to_dict() if snapshot.exists else {}
         current_count = data.get('precal_count', 0)
         
-        if current_count >= limit_daily:
-            raise HTTPException(status_code=429, detail=f"Límite diario alcanzado para el plan {plan_key}")
+        if current_count >= limit_monthly:
+            raise HTTPException(status_code=429, detail=f"Límite mensual alcanzado para el plan {plan_key}")
         
         transaction.set(ref, {
             'precal_count': current_count + 1,
@@ -114,8 +120,8 @@ async def consume_precal_credit(user_id: str, plan_key: str):
     await check_and_increment(transaction, stats_ref)
 
 async def refund_precal_credit(user_id: str):
-    today = get_date_utc_minus_6()
-    stats_ref = db.collection('users').document(user_id).collection('usage_stats').document(today)
+    current_month = get_month_utc_minus_6()
+    stats_ref = db.collection('users').document(user_id).collection('usage_stats').document(current_month)
     
     @firestore.async_transactional
     async def check_and_decrement(transaction, ref):
