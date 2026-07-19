@@ -48,9 +48,9 @@ class Settings(BaseSettings):
     TOP_P: float = 0.8
 
     # --- LÍMITES PRECALIFICADOR (VARIABLES DE ENTORNO CLOUDRUN) ---
-    LIMIT_BASICO_PRE_DAILY: int = 0
-    LIMIT_AVANZADO_PRE_DAILY: int = 20
-    LIMIT_PREMIUM_PRE_DAILY: int = 100
+    LIMIT_BASICO_PRE_MONTHLY: int = 90
+    LIMIT_AVANZADO_PRE_MONTHLY: int = 450
+    LIMIT_PREMIUM_PRE_MONTHLY: int = 750
 
     # --- CONTROL DE ACCESO ---
     ALLOWED_ORIGINS: Union[str, List[str]] = '["https://pida.iiresodh.org", "https://pida-ai.com", "https://pida-ai-v20.web.app", "http://localhost", "http://localhost:8080"]'
