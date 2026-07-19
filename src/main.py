@@ -40,9 +40,9 @@ app.add_middleware(
 
 # --- MAPAS DE LÍMITES ---
 PRECAL_LIMITS = {
-    "basico": settings.LIMIT_BASICO_PRE_DAILY,
-    "avanzado": settings.LIMIT_AVANZADO_PRE_DAILY,
-    "premium": settings.LIMIT_PREMIUM_PRE_DAILY,
+    "basico": settings.LIMIT_BASICO_PRE_MONTHLY,
+    "avanzado": settings.LIMIT_AVANZADO_PRE_MONTHLY,
+    "premium": settings.LIMIT_PREMIUM_PRE_MONTHLY,
     "vip": -1 
 }
 
