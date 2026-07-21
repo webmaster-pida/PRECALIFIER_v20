@@ -149,7 +149,9 @@ async def stream_analysis_generator(request_data: AnalysisRequest, user: Dict[st
     try:
         yield create_sse_event({"event": "status", "message": "Investigando bases legales y jurisprudencia..."})
         
-        search_query = f"Código Penal VIGENTE y ACTUALIZADO de {request_data.country_code or 'El Salvador'} y delitos relacionados con: {request_data.facts[:200]}"
+        # search_query = f"Código Penal VIGENTE y ACTUALIZADO de {request_data.country_code or 'El Salvador'} y delitos relacionados con: {request_data.facts[:200]}"
+        country_search = request_data.country_code if request_data.country_code else 'Derecho Penal Internacional y Derechos Humanos'
+        search_query = f"Legislación aplicable y delitos relacionados según {country_search} para los siguientes hechos: {request_data.facts[:200]}"
         
         # 1. BÚSQUEDA PARALELA
         rag_task = rag_client.search_internal_documents(request_data.facts)
